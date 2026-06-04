@@ -18,7 +18,7 @@ const { textToSpeech } = require('./tts');
 const { addLog } = require('./logger');
 
 const SILENCE_TIMEOUT_MS = 1200;
-const MIN_PCM_BYTES = 9600;
+const MIN_PCM_BYTES = 4800;
 
 const guildState = new Map();
 
@@ -44,13 +44,14 @@ async function speakInVC(connection, text, guildId) {
   try {
     addLog(`[Loaun] ${text}`);
     const pcmBuffer = await textToSpeech(text);
+    addLog(`[TTS] Got ${pcmBuffer.length} bytes, playing...`);
 
     if (state.interrupted) {
       state.interrupted = false;
       return;
     }
 
-    const stream = new Readable();
+    const stream = new Readable({ read() {} });
     stream.push(pcmBuffer);
     stream.push(null);
 
@@ -67,16 +68,10 @@ async function speakInVC(connection, text, guildId) {
     state.isSpeaking = true;
 
     await new Promise((resolve) => {
-      const done = () => {
-        state.isSpeaking = false;
-        resolve();
-      };
-
       const checkInterrupt = setInterval(() => {
         if (state.interrupted) {
           state.player.stop(true);
           clearInterval(checkInterrupt);
-          state.player.removeListener(AudioPlayerStatus.Idle, done);
           state.isSpeaking = false;
           state.interrupted = false;
           resolve();
@@ -85,16 +80,22 @@ async function speakInVC(connection, text, guildId) {
 
       state.player.once(AudioPlayerStatus.Idle, () => {
         clearInterval(checkInterrupt);
-        done();
+        state.isSpeaking = false;
+        resolve();
+      });
+
+      state.player.once('error', (err) => {
+        clearInterval(checkInterrupt);
+        addLog(`[Error] Player: ${err.message}`);
+        state.isSpeaking = false;
+        resolve();
       });
 
       state.player.play(resource);
     });
   } catch (err) {
-    console.error('[TTS] Error:', err.message);
-    addLog(`[Error] TTS failed: ${err.message}`);
-    const state = getState(guildId);
-    state.isSpeaking = false;
+    addLog(`[Error] TTS: ${err.message}`);
+    getState(guildId).isSpeaking = false;
   }
 }
 
@@ -112,7 +113,7 @@ function decodeOpusToPcm(opusChunks) {
     decoder.delete();
     return Buffer.concat(frames);
   } catch (err) {
-    console.error('[Opus] Decode error:', err.message);
+    addLog(`[Error] Opus decode: ${err.message}`);
     return Buffer.alloc(0);
   }
 }
@@ -131,8 +132,16 @@ async function joinVC(voiceChannel, textChannel, client) {
     selfMute: false,
   });
 
-  await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-  addLog(`[VC] Joined channel: ${voiceChannel.name}`);
+  addLog(`[VC] Connecting to ${voiceChannel.name}...`);
+
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    addLog(`[VC] Ready in ${voiceChannel.name}`);
+  } catch (err) {
+    addLog(`[Error] VC ready timeout: ${err.message}`);
+    connection.destroy();
+    throw err;
+  }
 
   const state = getState(guildId);
   state.player = createAudioPlayer();
@@ -141,27 +150,40 @@ async function joinVC(voiceChannel, textChannel, client) {
   const firstMember = voiceChannel.members.filter((m) => !m.user.bot).first();
   const greetName = firstMember?.user?.username || 'there';
 
-  setTimeout(async () => {
-    await speakInVC(
-      connection,
-      `Hey ${greetName}. I'm here. What's on your mind?`,
-      guildId
-    );
-  }, 800);
+  setTimeout(() => {
+    speakInVC(connection, `Hey ${greetName}. I'm here. What's on your mind?`, guildId);
+  }, 600);
 
+  setupReceiver(connection, voiceChannel, client, guildId);
+
+  connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    try {
+      await Promise.race([
+        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+      ]);
+    } catch {
+      connection.destroy();
+      guildState.delete(guildId);
+      addLog('[VC] Disconnected');
+    }
+  });
+}
+
+function setupReceiver(connection, voiceChannel, client, guildId) {
   const receiver = connection.receiver;
 
   receiver.speaking.on('start', (userId) => {
     if (userId === client.user?.id) return;
 
-    const curState = getState(guildId);
+    const state = getState(guildId);
 
-    if (curState.isSpeaking) {
-      addLog(`[VC] Interrupted by user ${userId}`);
-      curState.interrupted = true;
+    if (state.isSpeaking) {
+      addLog(`[VC] Interrupted by ${userId}`);
+      state.interrupted = true;
     }
 
-    if (curState.processingUsers.has(userId)) return;
+    if (state.processingUsers.has(userId)) return;
 
     const opusStream = receiver.subscribe(userId, {
       end: {
@@ -174,59 +196,55 @@ async function joinVC(voiceChannel, textChannel, client) {
     opusStream.on('data', (chunk) => opusChunks.push(chunk));
 
     opusStream.on('end', async () => {
-      if (curState.processingUsers.has(userId)) return;
-      curState.processingUsers.add(userId);
+      if (state.processingUsers.has(userId)) return;
+      state.processingUsers.add(userId);
 
       try {
         const pcmBuffer = decodeOpusToPcm(opusChunks);
-        if (pcmBuffer.length < MIN_PCM_BYTES) return;
+        addLog(`[STT] ${opusChunks.length} opus chunks → ${pcmBuffer.length} pcm bytes`);
+
+        if (pcmBuffer.length < MIN_PCM_BYTES) {
+          addLog(`[STT] Too short, skipping`);
+          return;
+        }
 
         const member = voiceChannel.guild.members.cache.get(userId);
         const username = member?.user?.username || 'User';
 
-        addLog(`[${username}] (transcribing ${pcmBuffer.length} bytes...)`);
         const transcript = await transcribeAudio(pcmBuffer);
-        if (!transcript || transcript.trim().length < 2) return;
+        if (!transcript || transcript.trim().length < 2) {
+          addLog(`[STT] Empty transcript`);
+          return;
+        }
 
         addLog(`[${username}] ${transcript}`);
-        await autoMemory(userId, username, transcript);
+        autoMemory(userId, username, transcript).catch(() => {});
         const memoryContext = buildMemoryContext(userId);
         const reply = await generateReply(userId, username, transcript, memoryContext, true);
 
-        if (!curState.interrupted) {
+        if (!state.interrupted) {
           await speakInVC(connection, reply, guildId);
         }
-        curState.interrupted = false;
+        state.interrupted = false;
       } catch (err) {
-        console.error('[Pipeline] Error:', err.message);
-        addLog(`[Error] ${err.message}`);
+        addLog(`[Error] Pipeline: ${err.message}`);
       } finally {
-        curState.processingUsers.delete(userId);
+        state.processingUsers.delete(userId);
       }
     });
-  });
 
-  connection.on(VoiceConnectionStatus.Disconnected, async () => {
-    try {
-      await Promise.race([
-        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-      ]);
-    } catch {
-      connection.destroy();
-      guildState.delete(guildId);
-      addLog('[VC] Disconnected and cleaned up');
-    }
+    opusStream.on('error', (err) => {
+      addLog(`[Error] Opus stream: ${err.message}`);
+      state.processingUsers.delete(userId);
+    });
   });
 }
 
 function leaveVC(guildId) {
   const connection = getVoiceConnection(guildId);
-  if (connection) {
-    connection.destroy();
-  }
+  if (connection) connection.destroy();
   guildState.delete(guildId);
-  addLog('[VC] Left voice channel');
+  addLog('[VC] Left');
 }
 
 module.exports = { joinVC, leaveVC };
