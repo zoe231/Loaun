@@ -1,0 +1,13 @@
+kind = "api"
+previewPath = "/bot"
+title = "Loaun Bot"
+version = "1.0.0"
+id = "discord-bot-loaun-001"
+
+[[services]]
+localPort = 3000
+name = "Loaun Discord Bot"
+paths = ["/bot"]
+
+[services.development]
+run = "BASE_PATH=/bot pnpm --filter @workspace/discord-bot run dev"

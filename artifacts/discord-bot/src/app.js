@@ -3,6 +3,8 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { generateReply } = require('./ai');
 const { remember, forget, buildMemoryContext, autoMemory } = require('./memory');
 const { joinVC, leaveVC } = require('./voice');
+const { addLog } = require('./logger');
+const { startDashboard } = require('./dashboard');
 
 const client = new Client({
   intents: [
@@ -15,8 +17,10 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
-client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
+startDashboard(client);
+
+client.once('clientReady', () => {
+  addLog(`Online as ${client.user.tag}`);
 });
 
 client.on('messageCreate', async (message) => {
@@ -42,15 +46,18 @@ client.on('messageCreate', async (message) => {
       return message.reply('Join a voice channel first.');
     }
     try {
+      addLog(`[CMD] !joinvc by ${username}`);
       await joinVC(message.member.voice.channel, message.channel, client);
       return message.reply('Joined.');
     } catch (err) {
       console.error('Join VC error:', err);
-      return message.reply('Could not join voice channel.');
+      addLog(`[Error] joinvc failed: ${err.message}`);
+      return message.reply(`Could not join: ${err.message}`);
     }
   }
 
   if (content === '!leavevc') {
+    addLog(`[CMD] !leavevc by ${username}`);
     leaveVC(message.guild.id);
     return message.reply('Left.');
   }
@@ -66,7 +73,7 @@ client.on('messageCreate', async (message) => {
     await message.channel.sendTyping();
     await autoMemory(userId, username, cleanContent);
     const memoryContext = buildMemoryContext(userId);
-    const reply = await generateReply(userId, username, cleanContent, memoryContext);
+    const reply = await generateReply(userId, username, cleanContent, memoryContext, false);
     if (reply.length > 1990) {
       const chunks = reply.match(/.{1,1990}/gs);
       for (const chunk of chunks) await message.reply(chunk);
@@ -74,7 +81,7 @@ client.on('messageCreate', async (message) => {
       await message.reply(reply);
     }
   } catch (err) {
-    console.error('Message handler error:', err);
+    console.error('Message error:', err);
     message.reply('Something broke, try again.');
   }
 });
