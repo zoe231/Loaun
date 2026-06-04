@@ -23,8 +23,17 @@ client.once('clientReady', () => {
   addLog(`Online as ${client.user.tag}`);
 });
 
+const processed = new Set();
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
+  if (processed.has(message.id)) return;
+  processed.add(message.id);
+  if (processed.size > 500) {
+    const first = processed.values().next().value;
+    processed.delete(first);
+  }
+
   const content = message.content.trim();
   const userId = message.author.id;
   const username = message.author.username;
@@ -45,15 +54,12 @@ client.on('messageCreate', async (message) => {
     if (!message.member?.voice?.channel) {
       return message.reply('Join a voice channel first.');
     }
-    try {
-      addLog(`[CMD] !joinvc by ${username}`);
-      await joinVC(message.member.voice.channel, message.channel, client);
-      return message.reply('Joined.');
-    } catch (err) {
-      console.error('Join VC error:', err);
-      addLog(`[Error] joinvc failed: ${err.message}`);
-      return message.reply(`Could not join: ${err.message}`);
-    }
+    addLog(`[CMD] !joinvc by ${username}`);
+    await joinVC(message.member.voice.channel, message.channel, client).catch((err) => {
+      addLog(`[Error] joinvc: ${err.message}`);
+      message.reply(`Could not join: ${err.message}`);
+    });
+    return;
   }
 
   if (content === '!leavevc') {
@@ -69,11 +75,13 @@ client.on('messageCreate', async (message) => {
   const cleanContent = content.replace(/<@!?\d+>/g, '').trim();
   if (!cleanContent) return message.reply('Yeah?');
 
+  let replied = false;
   try {
     await message.channel.sendTyping();
-    await autoMemory(userId, username, cleanContent);
+    autoMemory(userId, username, cleanContent).catch(() => {});
     const memoryContext = buildMemoryContext(userId);
     const reply = await generateReply(userId, username, cleanContent, memoryContext, false);
+    replied = true;
     if (reply.length > 1990) {
       const chunks = reply.match(/.{1,1990}/gs);
       for (const chunk of chunks) await message.reply(chunk);
@@ -82,7 +90,8 @@ client.on('messageCreate', async (message) => {
     }
   } catch (err) {
     console.error('Message error:', err);
-    message.reply('Something broke, try again.');
+    addLog(`[Error] ${err.message}`);
+    if (!replied) message.reply('Something went wrong, try again.').catch(() => {});
   }
 });
 

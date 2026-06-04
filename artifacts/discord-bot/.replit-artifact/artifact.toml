@@ -11,3 +11,13 @@ paths = ["/bot"]
 
 [services.development]
 run = "BASE_PATH=/bot pnpm --filter @workspace/discord-bot run dev"
+
+[services.production]
+
+[services.production.run]
+args = ["node", "artifacts/discord-bot/src/app.js"]
+
+[services.production.run.env]
+PORT = "3000"
+BASE_PATH = "/bot"
+NODE_ENV = "production"
