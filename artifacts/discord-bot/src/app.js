@@ -3,8 +3,7 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { generateReply } = require('./ai');
 const { remember, forget, buildMemoryContext, autoMemory } = require('./memory');
 const { joinVC, leaveVC } = require('./voice');
-const { addLog } = require('./logger');
-const { startDashboard } = require('./dashboard');
+const { addLog, flushStatus, markOffline } = require('./logger');
 
 const client = new Client({
   intents: [
@@ -17,11 +16,14 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
-startDashboard(client);
-
 client.once('clientReady', () => {
   addLog(`Online as ${client.user.tag}`);
+  flushStatus({ tag: client.user.tag });
+  setInterval(() => flushStatus({ tag: client.user.tag }), 5000);
 });
+
+process.on('exit', markOffline);
+process.on('SIGTERM', () => { markOffline(); process.exit(0); });
 
 const processed = new Set();
 
@@ -29,24 +31,19 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (processed.has(message.id)) return;
   processed.add(message.id);
-  if (processed.size > 500) {
-    const first = processed.values().next().value;
-    processed.delete(first);
-  }
+  if (processed.size > 500) processed.delete(processed.values().next().value);
 
   const content = message.content.trim();
   const userId = message.author.id;
   const username = message.author.username;
 
   if (content.startsWith('!remember ')) {
-    const fact = content.slice('!remember '.length).trim();
-    remember(userId, username, fact);
+    remember(userId, username, content.slice('!remember '.length).trim());
     return message.reply('Got it.');
   }
 
   if (content.startsWith('!forget ')) {
-    const keyword = content.slice('!forget '.length).trim();
-    const deleted = forget(userId, keyword);
+    const deleted = forget(userId, content.slice('!forget '.length).trim());
     return message.reply(deleted ? 'Forgotten.' : 'Nothing matched.');
   }
 
@@ -55,11 +52,10 @@ client.on('messageCreate', async (message) => {
       return message.reply('Join a voice channel first.');
     }
     addLog(`[CMD] !joinvc by ${username}`);
-    await joinVC(message.member.voice.channel, message.channel, client).catch((err) => {
+    joinVC(message.member.voice.channel, message.channel, client).catch((err) => {
       addLog(`[Error] joinvc: ${err.message}`);
-      message.reply(`Could not join: ${err.message}`);
     });
-    return;
+    return message.reply('Joined. Connecting audio now...');
   }
 
   if (content === '!leavevc') {
@@ -89,7 +85,6 @@ client.on('messageCreate', async (message) => {
       await message.reply(reply);
     }
   } catch (err) {
-    console.error('Message error:', err);
     addLog(`[Error] ${err.message}`);
     if (!replied) message.reply('Something went wrong, try again.').catch(() => {});
   }

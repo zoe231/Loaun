@@ -1,12 +1,16 @@
+const fs = require('fs');
+
 const MAX_LOGS = 100;
 const logs = [];
 const startTime = Date.now();
+const STATUS_FILE = '/tmp/bot-status.json';
 
 function addLog(msg) {
   const entry = { time: new Date().toLocaleTimeString(), msg };
   logs.push(entry);
   if (logs.length > MAX_LOGS) logs.shift();
   console.log(`${entry.time} ${msg}`);
+  flushStatus();
 }
 
 function getLogs() {
@@ -23,4 +27,22 @@ function getUptime() {
   return `${s}s`;
 }
 
-module.exports = { addLog, getLogs, getUptime, startTime };
+function flushStatus(extra = {}) {
+  try {
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({
+      online: true,
+      uptime: getUptime(),
+      logs: logs.slice(-50),
+      ...extra,
+    }));
+  } catch (_) {}
+}
+
+function markOffline() {
+  try {
+    const current = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...current, online: false }));
+  } catch (_) {}
+}
+
+module.exports = { addLog, getLogs, getUptime, flushStatus, markOffline };
