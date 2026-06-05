@@ -67,3 +67,17 @@ Available at `/api/bot` — shows bot online status, uptime, live activity log, 
 - Do NOT run `pnpm dev` at the workspace root — use `pnpm --filter @workspace/<name> run dev`
 - Dashboard polling URL is `/api/bot/status` (relative) — works from any domain
 - If the bot shows "already joined" errors, the previous connection wasn't destroyed cleanly — `!leavevc` then `!joinvc`
+
+## runing 
+
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('Bot is alive!');
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Keepalive server running on port ${PORT}`);
+});

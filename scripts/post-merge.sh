@@ -15,3 +15,5 @@ npm install tweetnacl
 npm install libsodium-wrappers
 # or
 npm install tweetnacl
+
+npm install express
