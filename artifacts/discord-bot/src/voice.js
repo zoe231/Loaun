@@ -27,6 +27,7 @@ function getState(guildId) {
       isSpeaking: false,
       interrupted: false,
       processingUsers: new Set(),
+      greeted: false,
     });
   }
   return guildState.get(guildId);
@@ -36,8 +37,8 @@ async function speakInVC(connection, text, guildId) {
   const state = getState(guildId);
   if (state.interrupted) { state.interrupted = false; return; }
 
+  addLog(`[Loaun] ${text}`);
   try {
-    addLog(`[Loaun] ${text}`);
     const pcmBuffer = await textToSpeech(text);
     if (state.interrupted) { state.interrupted = false; return; }
 
@@ -114,35 +115,54 @@ async function joinVC(voiceChannel, textChannel, client) {
     selfMute: false,
   });
 
-  addLog(`[VC] Joined ${voiceChannel.name}`);
+  addLog(`[VC] Joining ${voiceChannel.name} — initial state: ${connection.state.status}`);
 
   const state = getState(guildId);
+  state.greeted = false;
   state.player = createAudioPlayer();
   connection.subscribe(state.player);
 
   const firstMember = voiceChannel.members.filter((m) => !m.user.bot).first();
   const greetName = firstMember?.user?.username || 'there';
 
-  connection.on('stateChange', (old, next) => {
-    addLog(`[VC] ${old.status} → ${next.status}`);
-    if (next.status === VoiceConnectionStatus.Ready) {
-      addLog(`[VC] Audio ready — greeting ${greetName}`);
-      speakInVC(connection, `Hey ${greetName}. I'm here. What's on your mind?`, guildId);
+  async function greet() {
+    if (state.greeted) return;
+    state.greeted = true;
+    addLog(`[VC] Ready — greeting ${greetName}`);
+    await speakInVC(connection, `Hey ${greetName}. I'm here. What's on your mind?`, guildId);
+  }
+
+  // Already Ready by the time we attach the listener (rare but possible)
+  if (connection.state.status === VoiceConnectionStatus.Ready) {
+    greet();
+  }
+
+  connection.on('stateChange', (oldState, newState) => {
+    addLog(`[VC] ${oldState.status} → ${newState.status}`);
+    if (newState.status === VoiceConnectionStatus.Ready) {
+      greet();
     }
-    if (next.status === VoiceConnectionStatus.Destroyed) {
+    if (newState.status === VoiceConnectionStatus.Destroyed) {
       guildState.delete(guildId);
     }
   });
 
+  connection.on('error', (err) => {
+    addLog(`[Error] Connection: ${err.message}`);
+  });
+
+  // Auto-reconnect on disconnect
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    addLog('[VC] Disconnected — attempting rejoin');
     try {
       await Promise.race([
-        new Promise((_, r) => setTimeout(r, 5000)),
+        new Promise((_, r) => setTimeout(r, 5000, new Error('timeout'))),
       ]);
-    } catch (_) {}
-    connection.destroy();
-    guildState.delete(guildId);
-    addLog('[VC] Disconnected');
+    } catch (_) {
+      connection.destroy();
+      guildState.delete(guildId);
+      addLog('[VC] Gave up rejoining');
+    }
   });
 
   setupReceiver(connection, voiceChannel, client, guildId);
@@ -156,7 +176,7 @@ function setupReceiver(connection, voiceChannel, client, guildId) {
     const state = getState(guildId);
 
     if (state.isSpeaking) {
-      addLog(`[VC] Interrupted`);
+      addLog('[VC] Interrupted by user speech');
       state.interrupted = true;
     }
     if (state.processingUsers.has(userId)) return;
@@ -172,13 +192,13 @@ function setupReceiver(connection, voiceChannel, client, guildId) {
       state.processingUsers.add(userId);
       try {
         const pcm = decodeOpusToPcm(opusChunks);
-        addLog(`[STT] ${opusChunks.length} chunks → ${pcm.length} bytes`);
-        if (pcm.length < MIN_PCM_BYTES) { addLog(`[STT] Too short, skipping`); return; }
+        addLog(`[STT] ${opusChunks.length} Opus chunks → ${pcm.length}B PCM`);
+        if (pcm.length < MIN_PCM_BYTES) { addLog('[STT] Too short, skipping'); return; }
 
         const member = voiceChannel.guild.members.cache.get(userId);
         const username = member?.user?.username || 'User';
         const transcript = await transcribeAudio(pcm);
-        if (!transcript || transcript.trim().length < 2) { addLog(`[STT] Empty transcript`); return; }
+        if (!transcript || transcript.trim().length < 2) { addLog('[STT] Empty — skipping'); return; }
 
         addLog(`[${username}] ${transcript}`);
         autoMemory(userId, username, transcript).catch(() => {});
@@ -194,7 +214,7 @@ function setupReceiver(connection, voiceChannel, client, guildId) {
     });
 
     opusStream.on('error', (err) => {
-      addLog(`[Error] Stream: ${err.message}`);
+      addLog(`[Error] Opus stream: ${err.message}`);
       state.processingUsers.delete(userId);
     });
   });
@@ -204,7 +224,7 @@ function leaveVC(guildId) {
   const connection = getVoiceConnection(guildId);
   if (connection) connection.destroy();
   guildState.delete(guildId);
-  addLog('[VC] Left');
+  addLog('[VC] Left channel');
 }
 
 module.exports = { joinVC, leaveVC };
