@@ -18,6 +18,9 @@ const { addLog } = require('./logger');
 
 const SILENCE_TIMEOUT_MS = 1200;
 const MIN_PCM_BYTES = 4800;
+const READY_TIMEOUT_MS = 25000; // 25s to reach Ready before we retry
+const MAX_RETRIES = 3;
+
 const guildState = new Map();
 
 function getState(guildId) {
@@ -102,10 +105,14 @@ function decodeOpusToPcm(opusChunks) {
   }
 }
 
-async function joinVC(voiceChannel, textChannel, client) {
+async function connectWithRetry(voiceChannel, client, retryCount = 0) {
   const guildId = voiceChannel.guild.id;
+
   const existing = getVoiceConnection(guildId);
-  if (existing) existing.destroy();
+  if (existing) {
+    existing.destroy();
+    await new Promise((r) => setTimeout(r, 800));
+  }
 
   const connection = joinVoiceChannel({
     channelId: voiceChannel.id,
@@ -115,7 +122,7 @@ async function joinVC(voiceChannel, textChannel, client) {
     selfMute: false,
   });
 
-  addLog(`[VC] Joining ${voiceChannel.name} — initial state: ${connection.state.status}`);
+  addLog(`[VC] Attempt ${retryCount + 1} — state: ${connection.state.status}`);
 
   const state = getState(guildId);
   state.greeted = false;
@@ -125,47 +132,95 @@ async function joinVC(voiceChannel, textChannel, client) {
   const firstMember = voiceChannel.members.filter((m) => !m.user.bot).first();
   const greetName = firstMember?.user?.username || 'there';
 
-  async function greet() {
-    if (state.greeted) return;
-    state.greeted = true;
-    addLog(`[VC] Ready — greeting ${greetName}`);
-    await speakInVC(connection, `Hey ${greetName}. I'm here. What's on your mind?`, guildId);
-  }
+  return new Promise((resolve) => {
+    let readyTimer = null;
+    let resolved = false;
 
-  // Already Ready by the time we attach the listener (rare but possible)
-  if (connection.state.status === VoiceConnectionStatus.Ready) {
-    greet();
-  }
+    function done(success) {
+      if (resolved) return;
+      resolved = true;
+      if (readyTimer) clearTimeout(readyTimer);
+      resolve(success ? connection : null);
+    }
 
-  connection.on('stateChange', (oldState, newState) => {
-    addLog(`[VC] ${oldState.status} → ${newState.status}`);
-    if (newState.status === VoiceConnectionStatus.Ready) {
+    async function greet() {
+      if (state.greeted) return;
+      state.greeted = true;
+      addLog(`[VC] Ready! Greeting ${greetName}`);
+      setupReceiver(connection, voiceChannel, client, guildId);
+      await speakInVC(connection, `Hey ${greetName}. I'm here. What's on your mind?`, guildId);
+      done(true);
+    }
+
+    // Already Ready when listener attaches (very rare)
+    if (connection.state.status === VoiceConnectionStatus.Ready) {
       greet();
     }
-    if (newState.status === VoiceConnectionStatus.Destroyed) {
-      guildState.delete(guildId);
-    }
-  });
 
-  connection.on('error', (err) => {
-    addLog(`[Error] Connection: ${err.message}`);
-  });
+    connection.on('stateChange', (oldState, newState) => {
+      addLog(`[VC] ${oldState.status} → ${newState.status}`);
+      if (newState.status === VoiceConnectionStatus.Ready) {
+        greet();
+      }
+      if (newState.status === VoiceConnectionStatus.Destroyed) {
+        guildState.delete(guildId);
+        done(false);
+      }
+    });
 
-  // Auto-reconnect on disconnect
-  connection.on(VoiceConnectionStatus.Disconnected, async () => {
-    addLog('[VC] Disconnected — attempting rejoin');
-    try {
-      await Promise.race([
-        new Promise((_, r) => setTimeout(r, 5000, new Error('timeout'))),
-      ]);
-    } catch (_) {
+    // Log internal debug events from @discordjs/voice
+    connection.on('debug', (msg) => {
+      // Only log short messages to avoid flooding
+      const short = msg.replace(/\s+/g, ' ').slice(0, 180);
+      addLog(`[VCdbg] ${short}`);
+    });
+
+    connection.on('error', (err) => {
+      addLog(`[Error] Connection: ${err.message}`);
+    });
+
+    // Watchdog: if not Ready in READY_TIMEOUT_MS, retry or give up
+    readyTimer = setTimeout(async () => {
+      if (resolved) return;
+      addLog(`[VC] Timed out reaching Ready (attempt ${retryCount + 1})`);
       connection.destroy();
       guildState.delete(guildId);
-      addLog('[VC] Gave up rejoining');
-    }
-  });
 
-  setupReceiver(connection, voiceChannel, client, guildId);
+      if (retryCount < MAX_RETRIES) {
+        addLog(`[VC] Retrying... (${retryCount + 1}/${MAX_RETRIES})`);
+        await new Promise((r) => setTimeout(r, 1500));
+        const retryConn = await connectWithRetry(voiceChannel, client, retryCount + 1);
+        resolve(retryConn);
+      } else {
+        addLog('[VC] All retries failed — check network/UDP');
+        done(false);
+      }
+    }, READY_TIMEOUT_MS);
+
+    // Handle disconnect: try to reconnect
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      addLog('[VC] Disconnected');
+      try {
+        await new Promise((_, r) => setTimeout(r, 5000, new Error('timeout')));
+      } catch (_) {
+        if (!resolved) {
+          connection.destroy();
+          guildState.delete(guildId);
+          done(false);
+        }
+      }
+    });
+  });
+}
+
+async function joinVC(voiceChannel, textChannel, client) {
+  const guildId = voiceChannel.guild.id;
+  addLog(`[VC] Joining ${voiceChannel.name}`);
+  const connection = await connectWithRetry(voiceChannel, client, 0);
+  if (!connection) {
+    addLog('[VC] Could not connect to voice channel after retries');
+    textChannel.send("Couldn't connect to voice — check the Live Activity log on the dashboard.").catch(() => {});
+  }
 }
 
 function setupReceiver(connection, voiceChannel, client, guildId) {
@@ -176,7 +231,7 @@ function setupReceiver(connection, voiceChannel, client, guildId) {
     const state = getState(guildId);
 
     if (state.isSpeaking) {
-      addLog('[VC] Interrupted by user speech');
+      addLog('[VC] Interrupted by user');
       state.interrupted = true;
     }
     if (state.processingUsers.has(userId)) return;
@@ -192,7 +247,7 @@ function setupReceiver(connection, voiceChannel, client, guildId) {
       state.processingUsers.add(userId);
       try {
         const pcm = decodeOpusToPcm(opusChunks);
-        addLog(`[STT] ${opusChunks.length} Opus chunks → ${pcm.length}B PCM`);
+        addLog(`[STT] ${opusChunks.length} chunks → ${pcm.length}B PCM`);
         if (pcm.length < MIN_PCM_BYTES) { addLog('[STT] Too short, skipping'); return; }
 
         const member = voiceChannel.guild.members.cache.get(userId);

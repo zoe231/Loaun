@@ -29,6 +29,9 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Redirect root /api to dashboard
+app.get("/api", (_req, res) => res.redirect("/api/bot"));
+
 app.use("/api", router);
 
 export default app;
