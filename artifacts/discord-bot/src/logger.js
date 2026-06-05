@@ -29,10 +29,18 @@ function getUptime() {
 
 function flushStatus(extra = {}) {
   try {
+    // Lazy-load memory stats to avoid circular deps at module load time
+    let memoryStats = { users: [], totalUsers: 0 };
+    try {
+      const { getMemoryStats } = require('./memory');
+      memoryStats = getMemoryStats();
+    } catch (_) {}
+
     fs.writeFileSync(STATUS_FILE, JSON.stringify({
       online: true,
       uptime: getUptime(),
       logs: logs.slice(-50),
+      memory: memoryStats,
       ...extra,
     }));
   } catch (_) {}
