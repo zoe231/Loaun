@@ -113,12 +113,12 @@ h2{font-size:.78rem;font-weight:700;color:#555;text-transform:uppercase;letter-s
 <div class="card">
   <h2>Commands</h2>
   <div class="cmds-grid">
-    <div class="cmd-item"><code>!joinvc</code><span>Join your voice channel</span></div>
-    <div class="cmd-item"><code>!leavevc</code><span>Leave voice channel</span></div>
-    <div class="cmd-item"><code>!memory</code><span>See what I know about you</span></div>
-    <div class="cmd-item"><code>!remember &lt;fact&gt;</code><span>Store something permanently</span></div>
-    <div class="cmd-item"><code>!forget &lt;keyword&gt;</code><span>Remove a memory by keyword</span></div>
-    <div class="cmd-item"><code>!forgetall</code><span>Wipe all your data</span></div>
+    <div class="cmd-item"><code>:joinvc</code><span>Join your voice channel</span></div>
+    <div class="cmd-item"><code>:leavevc</code><span>Leave voice channel</span></div>
+    <div class="cmd-item"><code>:memory</code><span>See what I know about you</span></div>
+    <div class="cmd-item"><code>:remember &lt;fact&gt;</code><span>Store something permanently</span></div>
+    <div class="cmd-item"><code>:forget &lt;keyword&gt;</code><span>Remove a memory by keyword</span></div>
+    <div class="cmd-item"><code>:forgetall</code><span>Wipe all your data</span></div>
     <div class="cmd-item"><code>@Loaun &lt;msg&gt;</code><span>Chat in any channel</span></div>
     <div class="cmd-item"><code>DM Loaun</code><span>Private chat + voice notes</span></div>
   </div>

@@ -39,55 +39,55 @@ client.on('messageCreate', async (message) => {
   const username = message.author.username;
 
   // ── Commands (no mention needed) ──────────────────────────────────────────
-  if (content.startsWith('!remember ')) {
-    const fact = content.slice('!remember '.length).trim();
+  if (content.startsWith(':remember ')) {
+    const fact = content.slice(':remember '.length).trim();
     remember(userId, username, fact);
     addLog(`[Memory] Stored for ${username}: "${fact}"`);
     return message.reply(`Got it. I'll remember that.`);
   }
 
-  if (content.startsWith('!forget ')) {
-    const keyword = content.slice('!forget '.length).trim();
+  if (content.startsWith(':forget ')) {
+    const keyword = content.slice(':forget '.length).trim();
     const deleted = forget(userId, keyword);
     return message.reply(deleted ? `Done, I've cleared that.` : `Nothing matched that.`);
   }
 
-  if (content === '!forgetall') {
+  if (content === ':forgetall') {
     forgetAll(userId);
     return message.reply(`Wiped everything I had on you.`);
   }
 
-  if (content === '!memory') {
+  if (content === ':memory') {
     const ctx = buildMemoryContext(userId);
     return message.reply(ctx ? `What I know about you:\n${ctx}` : `I don't have any memories about you yet.`);
   }
 
-  if (content === '!joinvc') {
+  if (content === ':joinvc') {
     if (!message.member?.voice?.channel) {
       return message.reply('You need to be in a voice channel first.');
     }
-    addLog(`[CMD] !joinvc by ${username}`);
+    addLog(`[CMD] :joinvc by ${username}`);
     joinVC(message.member.voice.channel, message.channel, client).catch((err) => {
       addLog(`[Error] joinvc: ${err.message}`);
     });
     return message.reply('Joining now — give me a moment to connect audio.');
   }
 
-  if (content === '!leavevc') {
-    addLog(`[CMD] !leavevc by ${username}`);
+  if (content === ':leavevc') {
+    addLog(`[CMD] :leavevc by ${username}`);
     leaveVC(message.guild.id);
     return message.reply('Left.');
   }
 
-  if (content === '!help') {
+  if (content === ':help') {
     return message.reply(
       '**Loaun Commands**\n' +
-      '`!joinvc` — join your voice channel\n' +
-      '`!leavevc` — leave voice channel\n' +
-      '`!memory` — see what I know about you\n' +
-      '`!remember <fact>` — store something for me to remember\n' +
-      '`!forget <keyword>` — remove a memory\n' +
-      '`!forgetall` — wipe all your memories\n' +
+      '`:joinvc` — join your voice channel\n' +
+      '`:leavevc` — leave voice channel\n' +
+      '`:memory` — see what I know about you\n' +
+      '`:remember <fact>` — store something for me to remember\n' +
+      '`:forget <keyword>` — remove a memory\n' +
+      '`:forgetall` — wipe all your memories\n' +
       '\nYou can also mention me or DM me to chat.'
     );
   }
