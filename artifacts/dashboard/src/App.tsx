@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const SECRET = "zoe2004";
+const SESSION_KEY = "loaun_auth";
 
 interface LogEntry { time: string; msg: string; }
 interface MemUser {
@@ -25,7 +27,82 @@ function logClass(msg: string) {
   return "text-zinc-300";
 }
 
-export default function App() {
+function LockScreen({ onUnlock }: { onUnlock: () => void }) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState(false);
+  const [shake, setShake] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  function attempt(e: React.FormEvent) {
+    e.preventDefault();
+    if (code === SECRET) {
+      sessionStorage.setItem(SESSION_KEY, "1");
+      onUnlock();
+    } else {
+      setError(true);
+      setShake(true);
+      setCode("");
+      setTimeout(() => setShake(false), 500);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center px-4">
+      <div className={`w-full max-w-sm bg-card border border-border rounded-2xl p-8 flex flex-col items-center gap-6 ${shake ? "animate-shake" : ""}`}>
+        {/* Lock icon */}
+        <div className="w-16 h-16 rounded-2xl bg-indigo-950 border border-indigo-800 flex items-center justify-center">
+          <svg className="w-8 h-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round"
+              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+        </div>
+
+        <div className="text-center">
+          <h1 className="text-2xl font-bold tracking-tight">Loaun Dashboard</h1>
+          <p className="text-muted-foreground text-sm mt-1">Enter the access code to continue</p>
+        </div>
+
+        <form onSubmit={attempt} className="w-full flex flex-col gap-3">
+          <input
+            ref={inputRef}
+            type="password"
+            value={code}
+            onChange={(e) => { setCode(e.target.value); setError(false); }}
+            placeholder="Access code"
+            className={`w-full bg-muted border rounded-xl px-4 py-3 text-center text-lg tracking-[0.3em] font-mono outline-none transition-colors
+              ${error ? "border-red-500 text-red-400 placeholder:text-red-800" : "border-border focus:border-indigo-500 text-foreground placeholder:text-muted-foreground"}`}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {error && (
+            <p className="text-red-400 text-xs text-center">Incorrect code. Try again.</p>
+          )}
+          <button
+            type="submit"
+            className="bg-primary text-primary-foreground font-semibold px-5 py-2.5 rounded-xl text-sm hover:opacity-90 transition-opacity"
+          >
+            Unlock
+          </button>
+        </form>
+      </div>
+
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          20% { transform: translateX(-8px); }
+          40% { transform: translateX(8px); }
+          60% { transform: translateX(-6px); }
+          80% { transform: translateX(6px); }
+        }
+        .animate-shake { animation: shake 0.4s ease-in-out; }
+      `}</style>
+    </div>
+  );
+}
+
+function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -79,7 +156,6 @@ export default function App() {
           )}
         </div>
 
-        {/* URL bar */}
         <div className="flex items-center gap-2 bg-muted border border-border rounded-xl px-4 py-2.5 mb-5 text-sm text-muted-foreground">
           <span className="flex-1 truncate">{window.location.origin}</span>
           <button
@@ -90,7 +166,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* Status */}
         <div className="flex items-center gap-3 mb-5">
           <span
             className={`w-2.5 h-2.5 rounded-full shrink-0 pulse-dot ${online ? "bg-emerald-400 text-emerald-400" : "bg-red-500 text-red-500"}`}
@@ -103,7 +178,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Stats grid */}
         <div className="grid grid-cols-2 gap-3 mb-5">
           <div className="bg-muted border border-border rounded-xl p-4">
             <div className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Uptime</div>
@@ -207,4 +281,10 @@ export default function App() {
 
     </div>
   );
+}
+
+export default function App() {
+  const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem(SESSION_KEY) === "1");
+  if (!unlocked) return <LockScreen onUnlock={() => setUnlocked(true)} />;
+  return <Dashboard />;
 }
